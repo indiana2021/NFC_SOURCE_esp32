@@ -83,7 +83,6 @@ void saveBruteForceResults();
 bool detectExternalReader();
 bool writeMifareClassic(uint8_t* uid, uint8_t uidLength, CardData* card);
 void listSDFiles(String* files, int* count, const char* extension, int maxFiles);
-bool detectExternalReader();
 void showLoading(const char* msg, uint16_t duration_ms);
 
 
