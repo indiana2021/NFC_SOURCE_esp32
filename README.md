@@ -1,6 +1,6 @@
 # NFC Multitool for ESP32-S3
 
-A versatile NFC tool built for Seeed Studio XIAO ESP32S3 that provides:
+A versatile NFC tool built for ESP32-S3-DevKitC-1 that provides:
 - NFC card reading/writing
 - Reader detection
 - Card emulation (basic)
@@ -20,7 +20,7 @@ A versatile NFC tool built for Seeed Studio XIAO ESP32S3 that provides:
 
 ## Hardware Requirements
 
-- Seeed Studio XIAO ESP32S3
+- ESP32-S3-DevKitC-1 Development Board
 - PN532 NFC module
 - OLED display (SSD1306, 128x64)
 - MicroSD card module
@@ -32,13 +32,13 @@ A versatile NFC tool built for Seeed Studio XIAO ESP32S3 that provides:
 |-----------|-------------|
 | PN532 IRQ | GPIO4 |
 | PN532 RST | GPIO5 |
-| SD CS     | GPIO23 |
-| OLED SDA  | GPIO21 |
-| OLED SCL  | GPIO22 |
-| Button Up | GPIO17 |
-| Button Down | GPIO18 |
-| Button Select | GPIO15 |
-| Button Back | GPIO16 |
+| SD CS     | GPIO10 |
+| OLED SDA  | GPIO8 |
+| OLED SCL  | GPIO9 |
+| Button Up | GPIO2 |
+| Button Down | GPIO3 |
+| Button Select | GPIO1 |
+| Button Back | GPIO0 |
 
 ## Installation
 
