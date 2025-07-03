@@ -72,6 +72,7 @@ bool readMifareClassic();
 bool readMifareUltralight();
 bool readNTAG();
 String getCardTypeName(uint8_t cardType);
+String getIssuerName(uint8_t* uid, uint8_t uidLength);
 bool loadCardFromSD(const char* filename, CardData* card);
 void displayBruteForceStarted();
 void performBruteForceStep();
@@ -80,11 +81,10 @@ void displayBruteForceResults();
 void printKey(const uint8_t* key);
 void saveBruteForceResults();
 bool detectExternalReader();
-void stopCardEmulation();
 bool writeMifareClassic(uint8_t* uid, uint8_t uidLength, CardData* card);
 void listSDFiles(String* files, int* count, const char* extension, int maxFiles);
 bool detectExternalReader();
-void stopCardEmulation();
+void showLoading(const char* msg, uint16_t duration_ms);
 
 
 // Menu system
@@ -123,7 +123,7 @@ const uint8_t commonKeys[][6] = {
   {0x8F, 0xD0, 0xA4, 0xF2, 0x56, 0xE9}  // Campus card
 };
 
-const uint8_t numCommonKeys = sizeof(commonKeys) / 6;
+const uint8_t numCommonKeys = sizeof(commonKeys) / sizeof(commonKeys[0]);
 
 // Brute force state
 struct BruteForceState {
@@ -182,9 +182,16 @@ void setup() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0,0);
-  display.println("NFC Multitool v1.0");
-  display.println("Initializing...");
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setCursor(20, 10);
+  display.println("nfcGOD");
+  display.setTextSize(1);
+  display.setCursor(25, 35);
+  display.println("by your name");
   display.display();
+  delay(2000);
+  showLoading("Initializing...", 1000);
   
   // Setup CS pin for SD card
   pinMode(SD_CS, OUTPUT);
@@ -359,12 +366,35 @@ int getMaxMenuItems() {
   }
 }
 
+// Icon definitions (8x8 pixels)
+const unsigned char read_icon[] PROGMEM = {
+    0x00, 0x7e, 0x42, 0x42, 0x42, 0x42, 0x7e, 0x00
+};
+const unsigned char write_icon[] PROGMEM = {
+    0x00, 0x18, 0x24, 0x42, 0x42, 0x7e, 0x00, 0x00
+};
+const unsigned char emulate_icon[] PROGMEM = {
+    0x3c, 0x42, 0x99, 0xa5, 0xa5, 0x99, 0x42, 0x3c
+};
+const unsigned char brute_icon[] PROGMEM = {
+    0x00, 0x00, 0x7e, 0x08, 0x08, 0x7e, 0x00, 0x00
+};
+const unsigned char manager_icon[] PROGMEM = {
+    0x00, 0x3e, 0x4a, 0x4a, 0x4a, 0x3e, 0x00, 0x00
+};
+const unsigned char settings_icon[] PROGMEM = {
+    0x00, 0x1c, 0x22, 0x7f, 0x22, 0x1c, 0x00, 0x00
+};
+
+const unsigned char* menu_icons[] = {
+    read_icon, write_icon, emulate_icon, brute_icon, manager_icon, settings_icon
+};
+
 void displayMainMenu() {
   display.clearDisplay();
   display.setCursor(0,0);
   display.setTextSize(1);
-  display.println("=== NFC MULTITOOL ===");
-  display.println();
+  display.println("======= nfcGOD =======");
   
   const char* menuItems[] = {"Read Card", "Write Card", "Emulate", "Brute Force", "Manager", "Settings"};
   
@@ -374,10 +404,12 @@ void displayMainMenu() {
     } else {
       display.print("  ");
     }
+    display.drawBitmap(20, 10 + i * 9, menu_icons[i], 8, 8, 1);
+    display.setCursor(35, 10 + i * 9);
     display.println(menuItems[i]);
   }
   
-  display.println();
+  display.setCursor(0, 56);
   display.print("Cards: ");
   display.println(totalCards);
   
@@ -465,6 +497,7 @@ void displayCardDetected(uint8_t* uid, uint8_t uidLength) {
 }
 
 void startReadCard() {
+  showLoading("Initializing NFC...", 200);
   display.clearDisplay();
   display.setCursor(0,0);
   display.println("=== READ CARD ===");
@@ -606,13 +639,6 @@ bool readNTAG() {
   return currentCard.dataLength > 0;
 }
 
-bool readISO14443A() {
-  // ISO14443-4 Type A reading logic
-  // This is more complex and depends on the specific card
-  currentCard.dataLength = 0;
-  return false; // Implement based on specific card requirements
-}
-
 void saveCardToSD() {
   // Generate filename based on UID
   String filename = CARD_DIR;
@@ -645,16 +671,40 @@ void saveCardToSD() {
   }
 }
 
+String getIssuerName(uint8_t* uid, uint8_t uidLength) {
+  if (uidLength > 0) {
+    switch (uid[0]) {
+      case 0x04: return "NXP";
+      case 0x05: return "Infineon";
+      case 0x07: return "Texas Instruments";
+      default: return "Unknown";
+    }
+  }
+  return "Unknown";
+}
+
 void displayReadSuccess() {
   display.clearDisplay();
   display.setCursor(0,0);
-  display.println("READ SUCCESS!");
-  display.println();
+  display.println("--- CARD DETAILS ---");
+  
   display.print("Type: ");
   display.println(getCardTypeName(currentCard.cardType));
+
+  display.print("UID: ");
+  for (uint8_t i = 0; i < currentCard.uidLength; i++) {
+    if (currentCard.uid[i] < 0x10) display.print("0");
+    display.print(currentCard.uid[i], HEX);
+  }
+  display.println();
+
+  display.print("Issuer: ");
+  display.println(getIssuerName(currentCard.uid, currentCard.uidLength));
+
   display.print("Size: ");
   display.print(currentCard.dataLength);
   display.println(" bytes");
+
   display.println();
   display.println("Saved to SD card");
   display.display();
@@ -681,6 +731,7 @@ String getCardTypeName(uint8_t cardType) {
 }
 
 void startWriteCard() {
+  showLoading("Preparing write...", 300);
   display.clearDisplay();
   display.setCursor(0,0);
   display.println("=== WRITE CARD ===");
@@ -716,6 +767,7 @@ void handleWriteCard() {
 
   // --- Step 1: File Selection ---
   if (!fileSelected) {
+    showLoading("Loading card list...", 200);
     // Populate file list if empty
     if (fileCount == 0) {
       listSDFiles(files, &fileCount, ".nfc", 16);
@@ -813,6 +865,7 @@ void handleWriteCard() {
 }
 
 void startBruteForce() {
+  showLoading("Preparing brute force...", 500);
   display.clearDisplay();
   display.setCursor(0,0);
   display.println("=== BRUTE FORCE ===");
@@ -836,6 +889,14 @@ void startBruteForce() {
   }
 }
 
+/**
+ * Handle brute force menu option.
+ *
+ * If the brute force attack is not running, check for a card
+ * presence and start the brute force attack if a card is
+ * detected. If the brute force attack is running, continue
+ * the attack.
+ */
 void handleBruteForce() {
   if (!bruteForce.isActive) {
     // Check for card presence
@@ -876,6 +937,16 @@ void displayBruteForceStarted() {
   display.display();
 }
 
+/**
+ * Continue the brute force attack on the current sector.
+ *
+ * This function will try the current key on the current sector, and if
+ * successful, store the key and move to the next sector. If all keys have
+ * been tried for this sector without success, move to the next sector.
+ *
+ * If all sectors have been done, stop the brute force attack and display the
+ * results.
+ */
 void performBruteForceStep() {
   // Check if we're done with all sectors
   if (bruteForce.currentSector >= 16) {
@@ -928,6 +999,13 @@ void performBruteForceStep() {
   }
 }
 
+/**
+ * Update the display with the current progress of a brute force attack.
+ *
+ * This function will display the current sector being attacked, the
+ * current key index, the number of sectors cracked so far, and the
+ * total number of attempts made.
+ */
 void displayBruteForceProgress() {
   display.clearDisplay();
   display.setCursor(0,0);
@@ -949,6 +1027,14 @@ void displayBruteForceProgress() {
   display.display();
 }
 
+/**
+ * Display the results of a brute force attack on the display.
+ *
+ * This function will display the number of sectors cracked, the total
+ * number of attempts, and the time taken for the brute force attack.
+ * It will also print detailed results to the serial console and save
+ * the results to an SD card.
+ */
 void displayBruteForceResults() {
   display.clearDisplay();
   display.setCursor(0,0);
@@ -984,6 +1070,12 @@ void displayBruteForceResults() {
   saveBruteForceResults();
 }
 
+/**
+ * Print a Mifare Classic key to the serial console in hexadecimal format.
+ * Each byte of the key is printed in two-digit hexadecimal format, separated
+ * by colons.
+ * @param key 6-byte array containing the Mifare Classic key
+ */
 void printKey(const uint8_t* key) {
   for(int i = 0; i < 6; i++) {
     if(key[i] < 0x10) Serial.print("0");
@@ -992,6 +1084,17 @@ void printKey(const uint8_t* key) {
   }
   Serial.println();
 }
+
+/**
+ * Save the results of a brute force operation to an SD card.
+ *
+ * This function saves the details of a brute force attack that was performed
+ * on a Mifare Classic card. It generates a filename based on the current
+ * time in seconds and writes the UID of the card and the keys found for
+ * each sector to the file. Each line in the file contains a sector number
+ * followed by the corresponding key in hexadecimal format, separated by
+ * colons.
+ */
 
 void saveBruteForceResults() {
   // e.g. "/cards/brute_123456.txt"
@@ -1023,6 +1126,14 @@ void saveBruteForceResults() {
   f.close();
 }
 
+/**
+ * @brief Display the Emulate Card menu
+ *
+ * This function displays the menu for the "Emulate Card" option. It shows a
+ * list of .nfc files found on the SD card and lets the user select one. Once a
+ * file is selected, it is loaded into memory and the ESP32 starts to emulate a
+ * card.
+ */
 void startEmulateCard() {
   display.clearDisplay();
   display.setCursor(0,0);
@@ -1033,6 +1144,18 @@ void startEmulateCard() {
   display.display();
 }
 
+/**
+ * @brief Handle the Emulate Card menu option
+ *
+ * This function handles the "Emulate Card" menu option. It first shows a list of
+ * .nfc files found on the SD card and lets the user select one. Once a file is
+ * selected, it is loaded into memory and the ESP32 starts to emulate a card
+ * with that data. The user is then shown a screen saying "Emulating card..."
+ * and the device waits for an external reader to detect it. If a reader is
+ * detected, the user is shown a success message. If no reader is detected after
+ * a short time, the user is shown a failure message. Finally, the device returns
+ * to the main menu.
+ */
 void handleEmulateCard() {
   static int sel = 0;
   static String files[16];
@@ -1146,7 +1269,6 @@ void startCardManager() {
   display.display();
 }
 
-/*************  ✨ Windsurf Command ⭐  *************/
 /**
  * @brief Handle the card manager menu state.
  *
@@ -1154,7 +1276,6 @@ void startCardManager() {
  * It draws the list of cards, handles navigation, and handles the
  * deletion of cards on the SELECT button press.
  */
-/*******  cd38e3ba-75d0-4862-9339-4f29dfd055d4  *******/
 void handleCardManager() {
   static int sel = 0;
   static String files[16];
@@ -1342,6 +1463,21 @@ void stopCardEmulation() {
  * Counts the number of .nfc files in the CARD_DIR directory
  * and stores the count in the totalCards variable.
  */
+void showLoading(const char* msg, uint16_t duration_ms = 500) {
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.println(msg);
+  display.println();
+  display.print("[");
+  for (int i = 0; i < 10; i++) {
+    display.print(">");
+    display.display();
+    delay(duration_ms/10);
+  }
+  display.println("]");
+  display.display();
+}
+
 void countCards() {
   totalCards = 0;
   File root = SD.open(CARD_DIR);
