@@ -5,27 +5,36 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-// Pin definitions for ESP32-S3-DevKitC-1
-// Safe GPIO pins that avoid strapping, flash, and restricted pins
-#define PN532_IRQ   (4)   // GPIO4 - safe digital pin
-#define PN532_RESET (5)   // GPIO5 - safe digital pin
-#define SD_CS       (23)  // GPIO23 - safe SPI CS pin
-#define OLED_RESET  (-1)  // Use -1 for shared reset via I2C
+// -- Pin definitions (ESP32-S3-DevKitC-1) --
 
-// Button pins - using safe GPIOs with internal pullups
-#define BTN_UP      (17)   // GPIO17 - safe input pin
-#define BTN_DOWN    (18)   // GPIO18 - safe input pin
-#define BTN_SELECT  (15)  // GPIO15 - safe input pin
-#define BTN_BACK    (16)  // GPIO16 - safe input pin
+// I2C (OLED)
+#define SDA_PIN     8    // GPIO8 (default SDA)
+#define SCL_PIN     9    // GPIO9 (default SCL)
+
+// SPI2 (HSPI) for PN532 & SD
+#define SCK_PIN     12   // GPIO12 (HSPI CLK)
+#define MISO_PIN    13   // GPIO13 (HSPI MISO)
+#define MOSI_PIN    11   // GPIO11 (HSPI MOSI)
+#define SD_CS       10   // GPIO10 (HSPI CS for SD card)
+
+// PN532 control lines
+#define PN532_IRQ   7    // GPIO7 (input)
+#define PN532_RESET 5    // GPIO5 (output)
+
+// On-board LED
+#define LED_PIN     38   // GPIO38 (DevKitC-1 RGB LED pin)
+
+// Button inputs (avoid strapping & flash pins)
+#define BTN_UP      14   // GPIO14
+#define BTN_DOWN    15   // GPIO15
+#define BTN_SELECT  16   // GPIO16
+#define BTN_BACK    17   // GPIO17
 
 // Display settings
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-#define OLED_ADDR 0x3C
-
-// I2C pins for ESP32-S3 (default pins)
-#define SDA_PIN 21
-#define SCL_PIN 22
+#define SCREEN_WIDTH   128
+#define SCREEN_HEIGHT  64
+#define OLED_RESET     -1    // Shared reset via I2C
+#define OLED_ADDR      0x3C
 
 // Initialize components
 Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
@@ -43,6 +52,14 @@ struct CardData {
 };
 
 // Function Prototypes
+void flashLED(int times) {
+  pinMode(LED_PIN, OUTPUT);
+  for (int i = 0; i < times; i++) {
+    digitalWrite(LED_PIN, HIGH); delay(100);
+    digitalWrite(LED_PIN, LOW);  delay(100);
+  }
+}
+
 void countCards();
 void displayMainMenu();
 void handleInput();
@@ -160,6 +177,21 @@ int totalCards = 0;
 void setup() {
   Serial.begin(115200);
   Serial.println("NFC Multitool Starting...");
+
+  // === START inserted ===
+  pinMode(LED_PIN, OUTPUT);
+  flashLED(3);
+
+  pinMode(BTN_UP,     INPUT_PULLUP);
+  pinMode(BTN_DOWN,   INPUT_PULLUP);
+  pinMode(BTN_SELECT, INPUT_PULLUP);
+  pinMode(BTN_BACK,   INPUT_PULLUP);
+
+  Wire.begin(SDA_PIN, SCL_PIN);
+  SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN, SD_CS);
+  pinMode(SD_CS, OUTPUT);
+  digitalWrite(SD_CS, HIGH);
+  // === END inserted ===
   
   // Initialize button pins with internal pullups
   pinMode(BTN_UP, INPUT_PULLUP);
@@ -184,6 +216,7 @@ void setup() {
   display.clearDisplay();
   display.setTextSize(2);
   display.setCursor(20, 10);
+  flashLED(3);
   display.println("nfcGOD");
   display.setTextSize(1);
   display.setCursor(25, 35);
@@ -706,6 +739,7 @@ void displayReadSuccess() {
 
   display.println();
   display.println("Saved to SD card");
+  flashLED(1);
   display.display();
 }
 
