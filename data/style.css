@@ -16,3 +16,6 @@ button {
   height: 200px;
   overflow: auto;
 }
+section {
+  margin-bottom: 1.5em;
+}

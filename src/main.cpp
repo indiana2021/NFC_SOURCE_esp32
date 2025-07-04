@@ -120,6 +120,32 @@ enum MenuState {
   SETTINGS_CONFIRM_FORMAT
 };
 
+const char* menuStateToString(MenuState s) {
+  switch(s) {
+    case MAIN_MENU: return "main_menu";
+    case READ_CARD: return "read";
+    case WRITE_CARD: return "write";
+    case EMULATE_CARD: return "emulate";
+    case BRUTE_FORCE: return "brute_force";
+    case CARD_MANAGER: return "card_manager";
+    case SETTINGS: return "settings";
+    case SETTINGS_CONFIRM_FORMAT: return "settings_confirm";
+    default: return "unknown";
+  }
+}
+
+bool stringToMenuState(const String& str, MenuState& out) {
+  if(str.equalsIgnoreCase("main_menu")) { out = MAIN_MENU; return true; }
+  if(str.equalsIgnoreCase("read")) { out = READ_CARD; return true; }
+  if(str.equalsIgnoreCase("write")) { out = WRITE_CARD; return true; }
+  if(str.equalsIgnoreCase("emulate")) { out = EMULATE_CARD; return true; }
+  if(str.equalsIgnoreCase("brute_force")) { out = BRUTE_FORCE; return true; }
+  if(str.equalsIgnoreCase("card_manager")) { out = CARD_MANAGER; return true; }
+  if(str.equalsIgnoreCase("settings")) { out = SETTINGS; return true; }
+  return false;
+}
+
+
 MenuState currentMenu = MAIN_MENU;
 int menuSelection = 0;
 bool cardPresent = false;
@@ -236,6 +262,34 @@ void setup() {
     json += "]}";
     req->send(200, "application/json", json);
   });
+
+  server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *req){
+    String json = "{\"mode\":\"" + String(menuStateToString(currentMenu)) + "\",\"uid\":\"" + lastUID + "\",\"dump\":[";
+    for(size_t i=0;i<lastDump.size();i++){ json += String(lastDump[i]); if(i+1<lastDump.size()) json += ","; }
+    json += "]}";
+    req->send(200, "application/json", json);
+  });
+
+  server.on("/api/mode", HTTP_GET, [](AsyncWebServerRequest *req){
+    String json = "{\"mode\":\"" + String(menuStateToString(currentMenu)) + "\"}";
+    req->send(200, "application/json", json);
+  });
+
+  server.on("/api/mode", HTTP_POST, [](AsyncWebServerRequest *req){
+    if(req->hasParam("mode", true)){
+      String m = req->getParam("mode", true)->value();
+      MenuState st;
+      if(stringToMenuState(m, st)){
+        currentMenu = st;
+        req->send(200, "text/plain", "OK");
+      } else {
+        req->send(400, "text/plain", "Invalid mode");
+      }
+    } else {
+      req->send(400, "text/plain", "No mode");
+    }
+  });
+
 
   server.begin();
   Serial.println("HTTP server started");
