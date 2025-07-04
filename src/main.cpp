@@ -52,14 +52,8 @@ struct CardData {
 };
 
 // Function Prototypes
-void flashLED(int times) {
-  pinMode(LED_PIN, OUTPUT);
-  for (int i = 0; i < times; i++) {
-    digitalWrite(LED_PIN, HIGH); delay(100);
-    digitalWrite(LED_PIN, LOW);  delay(100);
-  }
-}
-
+void hardResetPN532();
+void flashLED(int times);
 void countCards();
 void displayMainMenu();
 void handleInput();
@@ -70,6 +64,7 @@ void handleEmulateCard();
 void handleBruteForce();
 void handleCardManager();
 void handleSettings();
+void handleSettingsConfirmFormat();
 int getMaxMenuItems();
 void displayCurrentMenu();
 void selectMenuItem();
@@ -111,19 +106,21 @@ enum MenuState {
   EMULATE_CARD,
   BRUTE_FORCE,
   CARD_MANAGER,
-  SETTINGS
+  SETTINGS,
+  SETTINGS_CONFIRM_FORMAT
 };
 
 MenuState currentMenu = MAIN_MENU;
 int menuSelection = 0;
 bool cardPresent = false;
+unsigned long confirmationStartTime = 0;
 
 // Settings
 bool debugMode = true;
 uint8_t displayContrast = 255; // 0-255
 
 // Common Mifare Classic keys for brute force
-const uint8_t commonKeys[][6] = {
+const uint8_t commonKeys[][6] PROGMEM = {
   {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, // Default key
   {0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // Null key
   {0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5}, // NXP default
@@ -148,8 +145,9 @@ struct BruteForceState {
   uint8_t currentSector;
   uint8_t targetUID[10];
   uint8_t targetUIDLength;
-  uint8_t foundKeys[16][6]; // Store found keys for each sector
-  bool keyFound[16];
+  uint8_t foundKeys[40][6]; // Store found keys for each sector (up to 40 for 4k cards)
+  bool keyFound[40];
+  uint8_t sectorCount; // 16 for 1k, 40 for 4k
   uint32_t startTime;
   uint16_t totalAttempts;
   uint8_t successfulSectors;
@@ -178,32 +176,24 @@ void setup() {
   Serial.begin(115200);
   Serial.println("NFC Multitool Starting...");
 
-  // === START inserted ===
+  // Initialize hardware pins
   pinMode(LED_PIN, OUTPUT);
-  flashLED(3);
+  pinMode(SD_CS, OUTPUT);
+  digitalWrite(SD_CS, HIGH);
+  pinMode(PN532_RESET, OUTPUT);
+  digitalWrite(PN532_RESET, HIGH); // Set high initially
 
+  // Add button pin modes
   pinMode(BTN_UP,     INPUT_PULLUP);
   pinMode(BTN_DOWN,   INPUT_PULLUP);
   pinMode(BTN_SELECT, INPUT_PULLUP);
   pinMode(BTN_BACK,   INPUT_PULLUP);
 
-  Wire.begin(SDA_PIN, SCL_PIN);
-  SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN, SD_CS);
-  pinMode(SD_CS, OUTPUT);
-  digitalWrite(SD_CS, HIGH);
-  // === END inserted ===
-  
-  // Initialize button pins with internal pullups
-  pinMode(BTN_UP, INPUT_PULLUP);
-  pinMode(BTN_DOWN, INPUT_PULLUP);
-  pinMode(BTN_SELECT, INPUT_PULLUP);
-  pinMode(BTN_BACK, INPUT_PULLUP);
-  
-  // Initialize I2C with custom pins
+  // Initialize I2C for OLED
   Wire.begin(SDA_PIN, SCL_PIN);
   Wire.setClock(400000);
   
-  // Initialize OLED
+  // Initialize OLED display
   if(!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
     Serial.println("SSD1306 allocation failed");
     while(1);
@@ -213,32 +203,24 @@ void setup() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0,0);
-  display.clearDisplay();
   display.setTextSize(2);
   display.setCursor(20, 10);
-  flashLED(3);
   display.println("nfcGOD");
   display.setTextSize(1);
   display.setCursor(25, 35);
-  display.println("by your name");
+  display.println("by C. G.");
   display.display();
+  flashLED(2); // Flash to show display is up
   delay(2000);
   showLoading("Initializing...", 1000);
   
-  // Setup CS pin for SD card
-  pinMode(SD_CS, OUTPUT);
-  digitalWrite(SD_CS, HIGH);
-  
-  // Initialize SPI bus
-  SPI.begin();
+  // Initialize SPI for SD Card and PN532
+  SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN);
   
   // Initialize SD card
-  SPI.beginTransaction(SPISettings(20000000, MSBFIRST, SPI_MODE0));
-  digitalWrite(SD_CS, LOW);
+  SPI.beginTransaction(SPISettings(8000000, MSBFIRST, SPI_MODE0));
   bool sdOk = SD.begin(SD_CS);
-  digitalWrite(SD_CS, HIGH);
   SPI.endTransaction();
-
   if (!sdOk) {
     Serial.println("SD Card initialization failed!");
     display.println("SD Card Failed!");
@@ -254,13 +236,22 @@ void setup() {
   }
   
   // Initialize PN532
+  hardResetPN532();
   nfc.begin();
+  
   uint32_t versiondata = nfc.getFirmwareVersion();
   if (!versiondata) {
-    Serial.println("PN532 not found");
-    display.println("PN532 Not Found!");
-    display.display();
-    while(1);
+    Serial.println("Didn't find PN532 board, trying again...");
+    hardResetPN532();
+    versiondata = nfc.getFirmwareVersion();
+    if(!versiondata){
+      Serial.println("PN532 not found");
+      display.clearDisplay();
+      display.setCursor(0,0);
+      display.println("PN532 Not Found!");
+      display.display();
+      while(1);
+    }
   }
   
   Serial.print("Found chip PN5"); Serial.println((versiondata>>24) & 0xFF, HEX);
@@ -302,6 +293,9 @@ void loop() {
       break;
     case SETTINGS:
       handleSettings();
+      break;
+    case SETTINGS_CONFIRM_FORMAT:
+      handleSettingsConfirmFormat();
       break;
   }
   
@@ -543,6 +537,7 @@ void handleReadCard() {
   uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };
   uint8_t uidLength;
   
+  currentCard.isValid = false;
   if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
     // Copy UID
     currentCard.uidLength = uidLength;
@@ -588,28 +583,45 @@ bool readCardData() {
 }
 
 bool readMifareClassic() {
-  // Mifare Classic 1K/4K reading logic
-  uint8_t keyA[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
-  uint8_t keyB[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
-  
-  currentCard.dataLength = 0;
-  
-  // Try to read all sectors with default keys
-  for (uint8_t sector = 0; sector < 16; sector++) {
-    for (uint8_t block = 0; block < 4; block++) {
-      uint8_t blockNum = sector * 4 + block;
-      uint8_t blockData[16];
-      
-      if (nfc.mifareclassic_AuthenticateBlock(currentCard.uid, currentCard.uidLength, blockNum, 0, keyA)) {
-        if (nfc.mifareclassic_ReadDataBlock(blockNum, blockData)) {
-          memcpy(&currentCard.data[currentCard.dataLength], blockData, 16);
-          currentCard.dataLength += 16;
-        }
-      }
+    // This is a hack. We can't easily get the SAK for the active card.
+    // For now, we'll just try to read as a 1K card.
+    // A better solution would be to get SAK in handleReadCard and pass it.
+    uint8_t numSectors = 16;
+
+    uint8_t keyA[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+    currentCard.dataLength = 0;
+
+    // Limit reading to what fits in the buffer
+    uint16_t maxSectorsToRead = sizeof(currentCard.data) / (16 * 4);
+    if (numSectors > maxSectorsToRead) {
+        numSectors = maxSectorsToRead;
     }
-  }
-  
-  return currentCard.dataLength > 0;
+
+    for (uint8_t sector = 0; sector < numSectors; sector++) {
+        uint8_t blocks_in_sector = (sector < 32) ? 4 : 16;
+        for (uint8_t block = 0; block < blocks_in_sector; block++) {
+            uint8_t blockNum;
+            if (sector < 32) {
+                blockNum = sector * 4 + block;
+            } else {
+                blockNum = 32 * 4 + (sector - 32) * 16 + block;
+            }
+
+            uint8_t blockData[16];
+            if (nfc.mifareclassic_AuthenticateBlock(currentCard.uid, currentCard.uidLength, blockNum, 0, keyA)) {
+                if (nfc.mifareclassic_ReadDataBlock(blockNum, blockData)) {
+                    if (currentCard.dataLength + 16 <= sizeof(currentCard.data)) {
+                        memcpy(&currentCard.data[currentCard.dataLength], blockData, 16);
+                        currentCard.dataLength += 16;
+                    }
+                }
+            } else {
+                // Could not auth, maybe fill with zeros or skip
+            }
+        }
+    }
+
+    return currentCard.dataLength > 0;
 }
 
 bool writeMifareClassic(uint8_t* uid, uint8_t uidLength, CardData* card) {
@@ -673,33 +685,35 @@ bool readNTAG() {
 
 void saveCardToSD() {
   // Generate filename based on UID
-  String filename = CARD_DIR;
+  char filename[48];
+  int offset = snprintf(filename, sizeof(filename), "%s", CARD_DIR);
   for (uint8_t i = 0; i < currentCard.uidLength; i++) {
-    if (currentCard.uid[i] < 0x10) filename += "0";
-    filename += String(currentCard.uid[i], HEX);
+    offset += snprintf(filename + offset, sizeof(filename) - offset, "%02X", currentCard.uid[i]);
   }
-  filename += ".nfc";
+  strncat(filename, ".nfc", sizeof(filename) - strlen(filename) - 1);
   
-  File cardFile = SD.open(filename.c_str(), FILE_WRITE);
+  File cardFile = SD.open(filename, FILE_WRITE);
   if (cardFile) {
     // Write card header
     cardFile.write(currentCard.uidLength);
     cardFile.write(currentCard.uid, currentCard.uidLength);
     cardFile.write(currentCard.cardType);
-    cardFile.write((uint8_t)(currentCard.dataLength & 0xFF));
-    cardFile.write((uint8_t)(currentCard.dataLength >> 8));
+    uint8_t len_buf[2] = { (uint8_t)(currentCard.dataLength & 0xFF), (uint8_t)(currentCard.dataLength >> 8) };
+    cardFile.write(len_buf, 2);
     
     // Write card data
     cardFile.write(currentCard.data, currentCard.dataLength);
     
     cardFile.close();
     
-    strcpy(currentCard.filename, filename.c_str());
+    strncpy(currentCard.filename, filename, sizeof(currentCard.filename));
+    currentCard.filename[sizeof(currentCard.filename)-1] = '\0';
     currentCard.isValid = true;
     
     countCards();
     
-    Serial.println("Card saved: " + filename);
+    Serial.print("Card saved: ");
+    Serial.println(filename);
   }
 }
 
@@ -916,8 +930,9 @@ void startBruteForce() {
   bruteForce.currentSector = 0;
   bruteForce.totalAttempts = 0;
   bruteForce.successfulSectors = 0;
+  bruteForce.sectorCount = 0;
   
-  for(int i = 0; i < 16; i++) {
+  for(int i = 0; i < 40; i++) {
     bruteForce.keyFound[i] = false;
   }
 }
@@ -941,8 +956,16 @@ void handleBruteForce() {
       bruteForce.targetUIDLength = uidLength;
       memcpy(bruteForce.targetUID, uid, uidLength);
       
+      // Try to determine card type by attempting authentication on sector 40
+      bruteForce.sectorCount = 16; // Default to 1K card
+      uint8_t testKey[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+      if (nfc.mifareclassic_AuthenticateBlock(uid, uidLength, 160, 0, testKey)) {
+        bruteForce.sectorCount = 40; // If we can auth sector 40, it's a 4K card
+      }
+      
       // Start brute force attack
       bruteForce.isActive = true;
+      bruteForce.startTime = millis();
       bruteForce.startTime = millis();
       
       displayBruteForceStarted();
@@ -981,13 +1004,16 @@ void displayBruteForceStarted() {
  * results.
  */
 void performBruteForceStep() {
-  // Check if we're done with all sectors
-  if (bruteForce.currentSector >= 16) {
+  // Check if we're done with all sectors or user pressed back
+  if (bruteForce.currentSector >= bruteForce.sectorCount || digitalRead(BTN_BACK) == LOW) {
     bruteForce.isActive = false;
     displayBruteForceResults();
     return;
   }
   
+  // Give other tasks a chance to run
+  yield();
+
   // Skip if we already found the key for this sector
   if (bruteForce.keyFound[bruteForce.currentSector]) {
     bruteForce.currentSector++;
@@ -995,20 +1021,27 @@ void performBruteForceStep() {
     return;
   }
   
-  // Try current key on current sector
-  uint8_t blockNum = bruteForce.currentSector * 4; // First block of sector
+      // Try current key on current sector (first block)
+      uint8_t blockNum;
+      if (bruteForce.currentSector < 32) {
+        blockNum = bruteForce.currentSector * 4;
+      } else {
+        blockNum = 32 * 4 + (bruteForce.currentSector - 32) * 16;
+      }
+      uint8_t key[6];
+      memcpy_P(key, commonKeys[bruteForce.currentKeyIndex], 6);
   
   if (nfc.mifareclassic_AuthenticateBlock(bruteForce.targetUID, bruteForce.targetUIDLength, 
-                                         blockNum, 0, (uint8_t*)commonKeys[bruteForce.currentKeyIndex])) {
+                                         blockNum, 0, key)) {
     // Key found!
-    memcpy(bruteForce.foundKeys[bruteForce.currentSector], commonKeys[bruteForce.currentKeyIndex], 6);
+    memcpy(bruteForce.foundKeys[bruteForce.currentSector], key, 6);
     bruteForce.keyFound[bruteForce.currentSector] = true;
     bruteForce.successfulSectors++;
     
     Serial.print("Key found for sector ");
     Serial.print(bruteForce.currentSector);
     Serial.print(": ");
-    printKey(commonKeys[bruteForce.currentKeyIndex]);
+    printKey(key);
     
     // Move to next sector
     bruteForce.currentSector++;
@@ -1046,7 +1079,8 @@ void displayBruteForceProgress() {
   display.println();
   display.print("Sector: ");
   display.print(bruteForce.currentSector);
-  display.print("/16");
+  display.print("/");
+  display.print(bruteForce.sectorCount);
   display.println();
   display.print("Key: ");
   display.print(bruteForce.currentKeyIndex + 1);
@@ -1075,7 +1109,8 @@ void displayBruteForceResults() {
   display.println();
   display.print("Sectors cracked: ");
   display.print(bruteForce.successfulSectors);
-  display.println("/16");
+  display.print("/");
+  display.println(bruteForce.sectorCount);
   display.print("Total attempts: ");
   display.println(bruteForce.totalAttempts);
   
@@ -1090,7 +1125,7 @@ void displayBruteForceResults() {
   
   // Print detailed results to serial
   Serial.println("\n=== BRUTE FORCE RESULTS ===");
-  for(int i = 0; i < 16; i++) {
+  for(int i = 0; i < bruteForce.sectorCount; i++) {
     if(bruteForce.keyFound[i]) {
       Serial.print("Sector ");
       Serial.print(i);
@@ -1145,7 +1180,7 @@ void saveBruteForceResults() {
   f.println();
   f.println("Sector:Key");
   // write each cracked sector
-  for (uint8_t s = 0; s < 16; s++) {
+  for (uint8_t s = 0; s < bruteForce.sectorCount; s++) {
     if (bruteForce.keyFound[s]) {
       f.print(s); f.print(": ");
       for (uint8_t b = 0; b < 6; b++) {
@@ -1230,8 +1265,9 @@ void handleEmulateCard() {
 
   // --- Step 2: Emulate Card ---
   CardData cardToEmulate;
-  String filepath = String(CARD_DIR) + files[sel];
-  if (!loadCardFromSD(filepath.c_str(), &cardToEmulate)) {
+  char filepath[48];
+  snprintf(filepath, sizeof(filepath), "%s%s", CARD_DIR, files[sel].c_str());
+  if (!loadCardFromSD(filepath, &cardToEmulate)) {
     display.clearDisplay();
     display.println("Load failed!");
     display.display();
@@ -1271,6 +1307,7 @@ void handleEmulateCard() {
       delay(1000);
       break;
     }
+    yield(); // Allow other tasks to run
     delay(50);
   }
 
@@ -1298,7 +1335,7 @@ void startCardManager() {
   display.print("Total cards: ");
   display.println(totalCards);
   display.println();
-  display.println("Navigate with u/d");
+  display.println("Navigate with UP/DOWN");
   display.display();
 }
 
@@ -1399,51 +1436,28 @@ void handleSettings() {
         displaySettingsMenu();
         break;
       case 2: // Format SD
+        currentMenu = SETTINGS_CONFIRM_FORMAT;
+        confirmationStartTime = millis();
         display.clearDisplay();
         display.setCursor(0,0);
         display.println("FORMATTING SD...");
         display.println("This is permanent!");
         display.println("Press SELECT again");
-        display.println("to confirm.");
+        display.println("to confirm (5s).");
         display.display();
-        // Wait for second confirm
-        while(digitalRead(BTN_SELECT) == HIGH) {
-          if(digitalRead(BTN_BACK) == LOW) {
-            displaySettingsMenu();
-            return;
-          }
-        }
-        // Actually format
-        // Note: This is a simple format, just deleting files.
-        {
-          File root = SD.open(CARD_DIR);
-          while(true) {
-            File entry = root.openNextFile();
-            if(!entry) break;
-            String path = String(CARD_DIR) + entry.name();
-            SD.remove(path.c_str());
-            entry.close();
-          }
-          root.close();
-        }
-        display.clearDisplay();
-        display.setCursor(0,0);
-        display.println("Format Complete!");
-        display.display();
-        delay(1000);
-        countCards(); // Recount cards (should be 0)
-        displaySettingsMenu();
         break;
       case 3: // About
         display.clearDisplay();
         display.setCursor(0,0);
         display.println("NFC Multitool v1.0");
-        display.println("By: Your Name");
-        display.println("Built with Cline");
+        display.println("By: C. G.");
+        display.println("Built with Adafruit");
         display.println();
         display.println("Press BACK to exit");
         display.display();
-        while(digitalRead(BTN_BACK) == HIGH); // wait for back
+        while(digitalRead(BTN_BACK) == HIGH) {
+          yield(); // wait for back
+        }
         displaySettingsMenu();
         break;
     }
@@ -1457,25 +1471,75 @@ void handleSettings() {
   }
 }
 
+void handleSettingsConfirmFormat() {
+  // Timeout
+  if (millis() - confirmationStartTime > 5000) {
+    resetButtons();
+    currentMenu = SETTINGS;
+    displaySettingsMenu();
+    return;
+  }
+
+  // Confirmed
+  if (btnSelectPressed) {
+    resetButtons();
+    // Actually format
+    // Note: This is a simple format, just deleting files.
+    {
+      File root = SD.open(CARD_DIR);
+      while(true) {
+        File entry = root.openNextFile();
+        if(!entry) break;
+        String path = String(CARD_DIR) + entry.name();
+        SD.remove(path.c_str());
+        entry.close();
+      }
+      root.close();
+    }
+    display.clearDisplay();
+    display.setCursor(0,0);
+    display.println("Format Complete!");
+    display.display();
+    delay(1000);
+    countCards(); // Recount cards (should be 0)
+    currentMenu = SETTINGS;
+    displaySettingsMenu();
+    return;
+  }
+
+  // Canceled
+  if (btnBackPressed) {
+    resetButtons();
+    currentMenu = SETTINGS;
+    displaySettingsMenu();
+  }
+}
+
 // ——— ADD ABOVE countCards() ———
 bool loadCardFromSD(const char* filename, CardData* card) {
   File f = SD.open(filename, FILE_READ);
-  if (!f) return false;
+  if (!f) {
+    Serial.println("Failed to open card file");
+    return false;
+  }
 
-  // read UID length + UID
-  card->uidLength = f.read();
-  f.read(card->uid, card->uidLength);
+  // read UID length
+  if (f.read(&card->uidLength, 1) != 1) { f.close(); return false; }
+  if (card->uidLength > sizeof(card->uid)) { f.close(); return false; }
+  // read UID
+  if (f.read(card->uid, card->uidLength) != card->uidLength) { f.close(); return false; }
 
   // read card type
-  card->cardType = f.read();
+  if (f.read(&card->cardType, 1) != 1) { f.close(); return false; }
 
   // read dataLength (little-endian)
-  uint16_t lo = f.read();
-  uint16_t hi = f.read();
-  card->dataLength = lo | (hi << 8);
+  uint8_t len_buf[2];
+  if (f.read(len_buf, 2) != 2) { f.close(); return false; }
+  card->dataLength = len_buf[0] | (len_buf[1] << 8);
+  if (card->dataLength > sizeof(card->data)) { f.close(); return false; }
 
   // read data blob
-  f.read(card->data, card->dataLength);
+  if (f.read(card->data, card->dataLength) != card->dataLength) { f.close(); return false; }
 
   card->isValid = true;
   f.close();
@@ -1525,4 +1589,26 @@ void countCards() {
     }
     root.close();
   }
+}
+
+void flashLED(int times) {
+  for (int i = 0; i < times; i++) {
+    digitalWrite(LED_PIN, HIGH); delay(50);
+    digitalWrite(LED_PIN, LOW);  delay(50);
+    if (digitalRead(BTN_BACK) == LOW) break; // Allow early exit
+  }
+}
+
+/**
+ * @brief Performs a hardware reset of the PN532 module.
+ * 
+ * This function toggles the PN532_RESET pin LOW, waits for a short duration,
+ * and then toggles it HIGH again to perform a hard reset of the chip.
+ * This is useful for re-initializing the chip in case of an error state.
+ */
+void hardResetPN532() {
+  digitalWrite(PN532_RESET, LOW);
+  delay(100); // Time for the chip to reset
+  digitalWrite(PN532_RESET, HIGH);
+  delay(250); // Time for the chip to wake up
 }
