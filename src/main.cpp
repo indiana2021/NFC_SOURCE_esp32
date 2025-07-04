@@ -9,6 +9,8 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <vector>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 // -- Pin definitions (ESP32-S3-DevKitC-1) --
 
@@ -45,6 +47,7 @@
 Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 AsyncWebServer server(80);
+SemaphoreHandle_t nfcMutex;
 
 // Storage for last read
 String lastUID;
@@ -106,6 +109,61 @@ bool detectExternalReader();
 bool writeMifareClassic(uint8_t* uid, uint8_t uidLength, CardData* card);
 void listSDFiles(String* files, int* count, const char* extension, int maxFiles);
 void showLoading(const char* msg, uint16_t duration_ms);
+bool nfcReadPassive(uint8_t* uid, uint8_t* uidLength, uint16_t timeout = 0);
+bool nfcAuthBlock(uint8_t* uid, uint8_t uidLength, uint8_t block, uint8_t keyNo, uint8_t* key);
+bool nfcReadBlock(uint8_t block, uint8_t* data);
+bool nfcWriteBlock(uint8_t block, uint8_t* data);
+bool nfcReadPage(uint8_t page, uint8_t* data);
+uint8_t nfcListTargets();
+
+// Simple mutex-protected wrappers around PN532 operations
+bool nfcReadPassive(uint8_t* uid, uint8_t* uidLength, uint16_t timeout) {
+  bool res;
+  xSemaphoreTake(nfcMutex, portMAX_DELAY);
+  res = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, uidLength, timeout);
+  xSemaphoreGive(nfcMutex);
+  return res;
+}
+
+bool nfcAuthBlock(uint8_t* uid, uint8_t uidLength, uint8_t block, uint8_t keyNo, uint8_t* key) {
+  bool res;
+  xSemaphoreTake(nfcMutex, portMAX_DELAY);
+  res = nfc.mifareclassic_AuthenticateBlock(uid, uidLength, block, keyNo, key);
+  xSemaphoreGive(nfcMutex);
+  return res;
+}
+
+bool nfcReadBlock(uint8_t block, uint8_t* data) {
+  bool res;
+  xSemaphoreTake(nfcMutex, portMAX_DELAY);
+  res = nfc.mifareclassic_ReadDataBlock(block, data);
+  xSemaphoreGive(nfcMutex);
+  return res;
+}
+
+bool nfcWriteBlock(uint8_t block, uint8_t* data) {
+  bool res;
+  xSemaphoreTake(nfcMutex, portMAX_DELAY);
+  res = nfc.mifareclassic_WriteDataBlock(block, data);
+  xSemaphoreGive(nfcMutex);
+  return res;
+}
+
+bool nfcReadPage(uint8_t page, uint8_t* data) {
+  bool res;
+  xSemaphoreTake(nfcMutex, portMAX_DELAY);
+  res = nfc.mifareultralight_ReadPage(page, data);
+  xSemaphoreGive(nfcMutex);
+  return res;
+}
+
+uint8_t nfcListTargets() {
+  uint8_t res;
+  xSemaphoreTake(nfcMutex, portMAX_DELAY);
+  res = nfc.inListPassiveTarget();
+  xSemaphoreGive(nfcMutex);
+  return res;
+}
 
 
 // Menu system
@@ -203,6 +261,9 @@ void setup() {
   Serial.print("AP IP address: ");
   Serial.println(apIP);
 
+  // Create mutex for PN532 access
+  nfcMutex = xSemaphoreCreateMutex();
+
   // **Serve static files** from SPIFFS
   server.serveStatic("/", SPIFFS, "/").setDefaultFile("index.html");
 
@@ -211,7 +272,7 @@ void setup() {
     // perform your NFC read logic:
     uint8_t uidBuf[10], uidLen;
     lastDump.clear();
-    if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uidBuf, &uidLen)) {
+    if (nfcReadPassive(uidBuf, &uidLen)) {
       // build UID string
       lastUID = "";
       for(int i=0;i<uidLen;i++){
@@ -220,8 +281,8 @@ void setup() {
       }
       // read card data into lastDump (example: Mifare Classic first block)
       uint8_t block[16];
-      if(nfc.mifareclassic_AuthenticateBlock(uidBuf, uidLen, 4, 0, (uint8_t*)"\xFF\xFF\xFF\xFF\xFF\xFF")){
-        if(nfc.mifareclassic_ReadDataBlock(4, block)){
+        if(nfcAuthBlock(uidBuf, uidLen, 4, 0, (uint8_t*)"\xFF\xFF\xFF\xFF\xFF\xFF")){
+          if(nfcReadBlock(4, block)){
           lastDump.insert(lastDump.end(), block, block+16);
         }
       }
@@ -563,7 +624,7 @@ void handleMainMenu() {
   uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };
   uint8_t uidLength;
   
-  if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 100)) {
+  if (nfcReadPassive(uid, &uidLength, 100)) {
     if (!cardPresent) {
       cardPresent = true;
       displayCardDetected(uid, uidLength);
@@ -606,7 +667,7 @@ void handleReadCard() {
   uint8_t uidLength;
   
   currentCard.isValid = false;
-  if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
+  if (nfcReadPassive(uid, &uidLength)) {
     // Copy UID
     currentCard.uidLength = uidLength;
     memcpy(currentCard.uid, uid, uidLength);
@@ -676,8 +737,8 @@ bool readMifareClassic() {
             }
 
             uint8_t blockData[16];
-            if (nfc.mifareclassic_AuthenticateBlock(currentCard.uid, currentCard.uidLength, blockNum, 0, keyA)) {
-                if (nfc.mifareclassic_ReadDataBlock(blockNum, blockData)) {
+            if (nfcAuthBlock(currentCard.uid, currentCard.uidLength, blockNum, 0, keyA)) {
+                if (nfcReadBlock(blockNum, blockData)) {
                     if (currentCard.dataLength + 16 <= sizeof(currentCard.data)) {
                         memcpy(&currentCard.data[currentCard.dataLength], blockData, 16);
                         currentCard.dataLength += 16;
@@ -703,13 +764,13 @@ bool writeMifareClassic(uint8_t* uid, uint8_t uidLength, CardData* card) {
     if ((blockNum + 1) % 4 == 0) continue;
 
     // Authenticate
-    if (!nfc.mifareclassic_AuthenticateBlock(uid, uidLength, blockNum, 0, keyA)) {
+    if (!nfcAuthBlock(uid, uidLength, blockNum, 0, keyA)) {
       Serial.print("Auth failed for block "); Serial.println(blockNum);
       return false;
     }
     
     // Write data
-    if (!nfc.mifareclassic_WriteDataBlock(blockNum, &card->data[i])) {
+    if (!nfcWriteBlock(blockNum, &card->data[i])) {
       Serial.print("Write failed for block "); Serial.println(blockNum);
       return false;
     }
@@ -723,7 +784,7 @@ bool readMifareUltralight() {
   
   for (uint8_t page = 0; page < 16; page++) {
     uint8_t pageData[4];
-    if (nfc.mifareultralight_ReadPage(page, pageData)) {
+    if (nfcReadPage(page, pageData)) {
       memcpy(&currentCard.data[currentCard.dataLength], pageData, 4);
       currentCard.dataLength += 4;
     } else {
@@ -740,7 +801,7 @@ bool readNTAG() {
   
   for (uint8_t page = 0; page < 45; page++) { // NTAG213 has 45 pages
     uint8_t pageData[4];
-    if (nfc.mifareultralight_ReadPage(page, pageData)) {
+    if (nfcReadPage(page, pageData)) {
       memcpy(&currentCard.data[currentCard.dataLength], pageData, 4);
       currentCard.dataLength += 4;
     } else {
@@ -938,7 +999,7 @@ void handleWriteCard() {
   uint8_t uidLength;
   
   // Wait for a card
-  if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
+  if (nfcReadPassive(uid, &uidLength)) {
     Serial.println("Found card to write to.");
     
     bool success = false;
@@ -1019,7 +1080,7 @@ void handleBruteForce() {
     uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };
     uint8_t uidLength;
     
-    if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
+    if (nfcReadPassive(uid, &uidLength)) {
       // Store target card info
       bruteForce.targetUIDLength = uidLength;
       memcpy(bruteForce.targetUID, uid, uidLength);
@@ -1027,7 +1088,7 @@ void handleBruteForce() {
       // Try to determine card type by attempting authentication on sector 40
       bruteForce.sectorCount = 16; // Default to 1K card
       uint8_t testKey[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-      if (nfc.mifareclassic_AuthenticateBlock(uid, uidLength, 160, 0, testKey)) {
+      if (nfcAuthBlock(uid, uidLength, 160, 0, testKey)) {
         bruteForce.sectorCount = 40; // If we can auth sector 40, it's a 4K card
       }
       
@@ -1098,8 +1159,8 @@ void performBruteForceStep() {
       uint8_t key[6];
       memcpy_P(key, commonKeys[bruteForce.currentKeyIndex], 6);
   
-  if (nfc.mifareclassic_AuthenticateBlock(bruteForce.targetUID, bruteForce.targetUIDLength, 
-                                         blockNum, 0, key)) {
+  if (nfcAuthBlock(bruteForce.targetUID, bruteForce.targetUIDLength,
+                   blockNum, 0, key)) {
     // Key found!
     memcpy(bruteForce.foundKeys[bruteForce.currentSector], key, 6);
     bruteForce.keyFound[bruteForce.currentSector] = true;
@@ -1615,7 +1676,7 @@ bool loadCardFromSD(const char* filename, CardData* card) {
 
 // ——— ABOVE countCards() ———
 bool detectExternalReader() {
-  return (nfc.inListPassiveTarget() > 0);
+  return (nfcListTargets() > 0);
 }
 
 void stopCardEmulation() {
