@@ -4,6 +4,11 @@
 #include <Adafruit_PN532.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <SPIFFS.h>
+#include <WiFi.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <vector>
 
 // -- Pin definitions (ESP32-S3-DevKitC-1) --
 
@@ -39,6 +44,11 @@
 // Initialize components
 Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+AsyncWebServer server(80);
+
+// Storage for last read
+String lastUID;
+std::vector<uint8_t> lastDump;
 
 // Card data structure
 struct CardData {
@@ -176,6 +186,60 @@ void setup() {
   Serial.begin(115200);
   Serial.println("NFC Multitool Starting...");
 
+  // **Mount SPIFFS** for web assets
+  if(!SPIFFS.begin(true)) {
+    Serial.println("SPIFFS Mount Failed");
+    while(1);
+  }
+
+  // **Initialize Wi-Fi** (AP mode)
+  WiFi.mode(WIFI_AP);
+  bool ok = WiFi.softAP("money", "money");
+  if (!ok) {
+    Serial.println("AP start failed!");
+    while(1);
+  }
+  IPAddress apIP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(apIP);
+
+  // **Serve static files** from SPIFFS
+  server.serveStatic("/", SPIFFS, "/").setDefaultFile("index.html");
+
+  // **API endpoint to trigger a read**
+  server.on("/api/read", HTTP_POST, [](AsyncWebServerRequest *req){
+    // perform your NFC read logic:
+    uint8_t uidBuf[10], uidLen;
+    lastDump.clear();
+    if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uidBuf, &uidLen)) {
+      // build UID string
+      lastUID = "";
+      for(int i=0;i<uidLen;i++){
+        char b[3]; sprintf(b,"%02X", uidBuf[i]);
+        lastUID += b;
+      }
+      // read card data into lastDump (example: Mifare Classic first block)
+      uint8_t block[16];
+      if(nfc.mifareclassic_AuthenticateBlock(uidBuf, uidLen, 4, 0, (uint8_t*)"\xFF\xFF\xFF\xFF\xFF\xFF")){
+        if(nfc.mifareclassic_ReadDataBlock(4, block)){
+          lastDump.insert(lastDump.end(), block, block+16);
+        }
+      }
+    }
+
+    // return JSON
+    String json = "{\"uid\":\"" + lastUID + "\",\"data\":[";
+    for(size_t i=0;i<lastDump.size();i++){
+      json += String(lastDump[i]);
+      if(i+1<lastDump.size()) json += ",";
+    }
+    json += "]}";
+    req->send(200, "application/json", json);
+  });
+
+  server.begin();
+  Serial.println("HTTP server started");
+
   // Initialize hardware pins
   pinMode(LED_PIN, OUTPUT);
   pinMode(SD_CS, OUTPUT);
@@ -270,6 +334,8 @@ void setup() {
 }
 
 void loop() {
+  // The web server is asynchronous, so the loop can be used for other tasks
+  // or be kept empty. The physical button handling is still needed.
   handleInput();
   
   switch(currentMenu) {
@@ -277,6 +343,8 @@ void loop() {
       handleMainMenu();
       break;
     case READ_CARD:
+      // This is now handled by the web UI, but we can leave the
+      // original functionality for the hardware buttons.
       handleReadCard();
       break;
     case WRITE_CARD:
