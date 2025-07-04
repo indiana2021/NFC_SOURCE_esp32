@@ -904,8 +904,8 @@ void handleWriteCard() {
     display.display();
 
     // Handle navigation
-    if (btnUpPressed)    sel = (sel + fileCount - 1) % fileCount;
-    if (btnDownPressed)  sel = (sel + 1) % fileCount;
+    if (btnUpPressed && fileCount > 0)    sel = (sel + fileCount - 1) % fileCount;
+    if (btnDownPressed && fileCount > 0)  sel = (sel + 1) % fileCount;
     if (btnBackPressed)  { fileCount = sel = 0; resetButtons(); currentMenu = MAIN_MENU; displayMainMenu(); return; }
 
     // Handle selection
@@ -1033,7 +1033,6 @@ void handleBruteForce() {
       
       // Start brute force attack
       bruteForce.isActive = true;
-      bruteForce.startTime = millis();
       bruteForce.startTime = millis();
       
       displayBruteForceStarted();
@@ -1318,8 +1317,8 @@ void handleEmulateCard() {
     }
     display.display();
 
-    if (btnUpPressed)    sel = (sel + fileCount - 1) % fileCount;
-    if (btnDownPressed)  sel = (sel + 1) % fileCount;
+    if (btnUpPressed && fileCount > 0)    sel = (sel + fileCount - 1) % fileCount;
+    if (btnDownPressed && fileCount > 0)  sel = (sel + 1) % fileCount;
     if (btnBackPressed)  { fileCount = sel = 0; currentMenu = MAIN_MENU; displayMainMenu(); return; }
 
     if (btnSelectPressed) {
@@ -1435,8 +1434,8 @@ void handleCardManager() {
   display.display();
 
   // nav
-  if (btnUpPressed)    sel = (sel + fileCount - 1) % fileCount;
-  if (btnDownPressed)  sel = (sel + 1) % fileCount;
+  if (btnUpPressed && fileCount > 0)    sel = (sel + fileCount - 1) % fileCount;
+  if (btnDownPressed && fileCount > 0)  sel = (sel + 1) % fileCount;
   if (btnBackPressed)  { fileCount = sel = 0; resetButtons(); currentMenu = MAIN_MENU; displayMainMenu(); return; }
 
   // delete on SELECT
