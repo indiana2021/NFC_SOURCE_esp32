@@ -8,7 +8,24 @@
 <body>
   <h1>nfcGOD Control Panel</h1>
 
+  <section id="control">
+    <h2>Mode</h2>
+    <select id="modeSelect">
+      <option value="read">Read Card</option>
+      <option value="write">Write Card</option>
+      <option value="emulate">Emulate Card</option>
+      <option value="brute_force">Brute Force</option>
+      <option value="card_manager">Card Manager</option>
+      <option value="settings">Settings</option>
+      <option value="main_menu">Main Menu</option>
+    </select>
+    <button id="setModeBtn">Set Mode</button>
+    <button id="refreshBtn">Refresh</button>
+  </section>
+
   <section id="status">
+    <h2>Status</h2>
+    <p>Current Mode: <span id="currentMode">—</span></p>
     <button id="readBtn">Read Card</button>
     <p>Last UID: <span id="lastUid">—</span></p>
     <pre id="dumpArea"></pre>
