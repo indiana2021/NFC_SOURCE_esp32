@@ -182,6 +182,7 @@ const unsigned long debounceDelay = 50;
 const char* CARD_DIR = "/cards/";
 int totalCards = 0;
 
+// Initialize hardware, storage and web server
 void setup() {
   Serial.begin(115200);
   Serial.println("NFC Multitool Starting...");
@@ -333,6 +334,7 @@ void setup() {
   displayMainMenu();
 }
 
+// Main program loop handles menu updates
 void loop() {
   // The web server is asynchronous, so the loop can be used for other tasks
   // or be kept empty. The physical button handling is still needed.
@@ -370,6 +372,7 @@ void loop() {
   delay(100);
 }
 
+// Clear all stored button press states
 void resetButtons() {
   btnUpPressed = false;
   btnDownPressed = false;
@@ -377,6 +380,7 @@ void resetButtons() {
   btnBackPressed = false;
 }
 
+// Read hardware buttons and update menu selection
 void handleInput() {
   // Read current button states
   bool btnUpState = digitalRead(BTN_UP);
@@ -447,6 +451,7 @@ void handleInput() {
   }
 }
 
+// Helper to know how many items are in the current menu
 int getMaxMenuItems() {
   switch(currentMenu) {
     case MAIN_MENU:
@@ -484,6 +489,7 @@ const unsigned char* menu_icons[] = {
     read_icon, write_icon, emulate_icon, brute_icon, manager_icon, settings_icon
 };
 
+// Draw the main menu with icons on the OLED
 void displayMainMenu() {
   display.clearDisplay();
   display.setCursor(0,0);
@@ -510,6 +516,7 @@ void displayMainMenu() {
   display.display();
 }
 
+// Refresh the OLED based on which menu is active
 void displayCurrentMenu() {
   switch(currentMenu) {
     case MAIN_MENU:
@@ -522,6 +529,7 @@ void displayCurrentMenu() {
   }
 }
 
+// Execute action for the highlighted menu entry
 void selectMenuItem() {
   // Reset button state on menu action
   resetButtons();
@@ -558,6 +566,7 @@ void selectMenuItem() {
   }
 }
 
+// Idle screen that shows a card prompt when detected
 void handleMainMenu() {
   // Check for card presence
   uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };
@@ -573,6 +582,7 @@ void handleMainMenu() {
   }
 }
 
+// Show UID information when a card is tapped
 void displayCardDetected(uint8_t* uid, uint8_t uidLength) {
   display.clearDisplay();
   display.setCursor(0,0);
@@ -590,6 +600,7 @@ void displayCardDetected(uint8_t* uid, uint8_t uidLength) {
   display.display();
 }
 
+// Prepare display and wait for an NFC card
 void startReadCard() {
   showLoading("Initializing NFC...", 200);
   display.clearDisplay();
@@ -601,6 +612,7 @@ void startReadCard() {
   display.display();
 }
 
+// Process a card read and store its data
 void handleReadCard() {
   uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };
   uint8_t uidLength;
@@ -626,6 +638,7 @@ void handleReadCard() {
   }
 }
 
+// Detect card type and fill currentCard data
 bool readCardData() {
   // Try to authenticate and read Mifare Classic
   if (readMifareClassic()) {
@@ -650,6 +663,7 @@ bool readCardData() {
   return false;
 }
 
+// Read data from a Mifare Classic card
 bool readMifareClassic() {
     // This is a hack. We can't easily get the SAK for the active card.
     // For now, we'll just try to read as a 1K card.
@@ -692,6 +706,7 @@ bool readMifareClassic() {
     return currentCard.dataLength > 0;
 }
 
+// Write a card dump back to a Mifare Classic tag
 bool writeMifareClassic(uint8_t* uid, uint8_t uidLength, CardData* card) {
   uint8_t keyA[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }; // Default key
   
@@ -717,6 +732,7 @@ bool writeMifareClassic(uint8_t* uid, uint8_t uidLength, CardData* card) {
   return true;
 }
 
+// Read data from a Mifare Ultralight tag
 bool readMifareUltralight() {
   // Mifare Ultralight reading logic
   currentCard.dataLength = 0;
@@ -734,6 +750,7 @@ bool readMifareUltralight() {
   return currentCard.dataLength > 0;
 }
 
+// Read data from NTAG series cards
 bool readNTAG() {
   // NTAG reading logic (similar to Ultralight but different page count)
   currentCard.dataLength = 0;
@@ -751,6 +768,7 @@ bool readNTAG() {
   return currentCard.dataLength > 0;
 }
 
+// Save the currently read card to the SD card
 void saveCardToSD() {
   // Generate filename based on UID
   char filename[48];
@@ -785,6 +803,7 @@ void saveCardToSD() {
   }
 }
 
+// Return manufacturer name based on first UID byte
 String getIssuerName(uint8_t* uid, uint8_t uidLength) {
   if (uidLength > 0) {
     switch (uid[0]) {
@@ -797,6 +816,7 @@ String getIssuerName(uint8_t* uid, uint8_t uidLength) {
   return "Unknown";
 }
 
+// Show card details after a successful read
 void displayReadSuccess() {
   display.clearDisplay();
   display.setCursor(0,0);
@@ -825,6 +845,7 @@ void displayReadSuccess() {
   display.display();
 }
 
+// Show a short error message after failed read
 void displayReadError() {
   display.clearDisplay();
   display.setCursor(0,0);
@@ -835,6 +856,7 @@ void displayReadError() {
   display.display();
 }
 
+// Convert card type enum to a human readable string
 String getCardTypeName(uint8_t cardType) {
   switch(cardType) {
     case 1: return "Mifare Classic";
@@ -845,6 +867,7 @@ String getCardTypeName(uint8_t cardType) {
   }
 }
 
+// Display write-card menu intro screen
 void startWriteCard() {
   showLoading("Preparing write...", 300);
   display.clearDisplay();
@@ -856,6 +879,7 @@ void startWriteCard() {
   display.display();
 }
 
+// Populate an array with filenames on the SD card
 void listSDFiles(String* files, int* count, const char* extension, int maxFiles) {
   *count = 0;
   File root = SD.open(CARD_DIR);
@@ -873,6 +897,7 @@ void listSDFiles(String* files, int* count, const char* extension, int maxFiles)
   root.close();
 }
 
+// Write a stored dump back to a new card
 void handleWriteCard() {
   static int sel = 0;
   static String files[16];
@@ -979,6 +1004,7 @@ void handleWriteCard() {
   }
 }
 
+// Show instructions before beginning brute force
 void startBruteForce() {
   showLoading("Preparing brute force...", 500);
   display.clearDisplay();
@@ -1043,6 +1069,7 @@ void handleBruteForce() {
   }
 }
 
+// Indicate brute force mode is running
 void displayBruteForceStarted() {
   display.clearDisplay();
   display.setCursor(0,0);
@@ -1394,6 +1421,7 @@ void handleEmulateCard() {
   displayMainMenu();
 }
 
+// Show basic card manager information
 void startCardManager() {
   display.clearDisplay();
   display.setCursor(0,0);
@@ -1454,6 +1482,7 @@ void handleCardManager() {
   }
 }
 
+// Draw settings options and current values
 void displaySettingsMenu() {
     display.clearDisplay();
     display.setCursor(0, 0);
@@ -1480,11 +1509,13 @@ void displaySettingsMenu() {
     display.display();
 }
 
+// Enter settings menu at the first option
 void startSettings() {
   menuSelection = 0;
   displaySettingsMenu();
 }
 
+// Respond to selection within the settings menu
 void handleSettings() {
   if (btnSelectPressed) {
     resetButtons();
@@ -1538,6 +1569,7 @@ void handleSettings() {
   }
 }
 
+// Confirm and execute SD card formatting
 void handleSettingsConfirmFormat() {
   // Timeout
   if (millis() - confirmationStartTime > 5000) {
@@ -1583,6 +1615,7 @@ void handleSettingsConfirmFormat() {
 }
 
 // ——— ADD ABOVE countCards() ———
+// Load a card dump file into a CardData struct
 bool loadCardFromSD(const char* filename, CardData* card) {
   File f = SD.open(filename, FILE_READ);
   if (!f) {
@@ -1614,10 +1647,12 @@ bool loadCardFromSD(const char* filename, CardData* card) {
 }
 
 // ——— ABOVE countCards() ———
+// Check if another NFC reader is nearby
 bool detectExternalReader() {
   return (nfc.inListPassiveTarget() > 0);
 }
 
+// End emulation session (placeholder)
 void stopCardEmulation() {
   // No action needed for simple detection
 }
@@ -1642,6 +1677,7 @@ void showLoading(const char* msg, uint16_t duration_ms = 500) {
   display.display();
 }
 
+// Recalculate how many .nfc files are stored
 void countCards() {
   totalCards = 0;
   File root = SD.open(CARD_DIR);
@@ -1658,6 +1694,7 @@ void countCards() {
   }
 }
 
+// Blink the onboard LED a given number of times
 void flashLED(int times) {
   for (int i = 0; i < times; i++) {
     digitalWrite(LED_PIN, HIGH); delay(50);
