@@ -43,6 +43,10 @@
 #define OLED_RESET     -1    // Shared reset via I2C
 #define OLED_ADDR      0x3C
 
+// Wi-Fi configuration
+const char WIFI_AP_SSID[] = "nfcGOD";
+const char WIFI_AP_PASS[] = "money";
+
 // Initialize components
 Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
@@ -279,7 +283,7 @@ void setup() {
 
   // **Initialize Wi-Fi** (AP mode)
   WiFi.mode(WIFI_AP);
-  bool ok = WiFi.softAP("money", "money");
+  bool ok = WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASS);
   if (!ok) {
     Serial.println("AP start failed!");
     while(1);
