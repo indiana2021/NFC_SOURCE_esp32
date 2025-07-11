@@ -11,6 +11,7 @@ nfcGOD is your all-in-one NFC hacking Swiss Army knife, packed with powerful fea
 - **Card Emulation** - Clone and emulate cards with ease
 - **Data Visualization** - Beautiful OLED display shows all tag details
 - **SD Card Storage** - Save and manage unlimited card dumps
+- **Web Interface** - Control the device and view data from your browser.
 - **Portable Design** - Fits in your pocket but packs enterprise-grade power
 
 ## 💪 Why You'll Love It
@@ -77,7 +78,7 @@ Join the NFC revolution today! What will YOU discover?
 
 ## 📖 Major Functions
 
-The firmware is organized into a simple, menu-driven system.
+The firmware is organized into a simple, menu-driven system accessible via the hardware buttons and a web interface.
 
 - **Read Card**:
   - Detects and identifies a nearby NFC card.
@@ -109,6 +110,14 @@ The firmware is organized into a simple, menu-driven system.
   - **Format SD**: Deletes all saved card files from the `/cards/` directory.
   - **About**: Displays project information.
 
+- **Web Interface**:
+  - When the device boots, it starts a Wi-Fi Access Point with the SSID `nfcGOD` and password `money`.
+  - Connect to this network and navigate to `http://192.168.4.1` in your browser.
+  - The web UI allows you to:
+    - View the current device mode.
+    - Trigger a card read and see the UID and data dump.
+    - Change the device's mode of operation.
+
 ## 📝 Project To-Dos
 
 This project is under active development. Here are some of the planned features and improvements:
@@ -116,7 +125,7 @@ This project is under active development. Here are some of the planned features 
 - [ ] **Advanced Emulation**: Implement more sophisticated emulation modes, including UID change for compatible cards.
 - [ ] **GUI Overhaul**: Improve the user interface with better graphics and more detailed information displays.
 - [ ] **Key Management**: Add a feature to manage and use custom keys for Mifare Classic authentication.
-- [ ] **Wi-Fi/Bluetooth Integration**: Add remote control or data transfer capabilities over Wi-Fi or BLE.
+- [x] **Wi-Fi/Bluetooth Integration**: Add remote control or data transfer capabilities over Wi-Fi or BLE. (Basic implementation complete)
 - [ ] **PCAP Logging**: Save raw NFC traffic to a `.pcap` file for analysis in tools like Wireshark.
 - [ ] **Save/Load Brute-Force State**: Allow pausing and resuming long-running brute-force attacks.
 
@@ -125,6 +134,7 @@ This project is under active development. Here are some of the planned features 
 This project relies on the following excellent libraries:
 - **Adafruit PN532**: For interfacing with the NFC module.
 - **Adafruit GFX & SSD1306**: For rendering graphics and text on the OLED display.
+- **ESPAsyncWebServer & AsyncTCP**: For the web interface.
 - **SPI, Wire, SD**: Core Arduino libraries for communication protocols.
 
 ## License

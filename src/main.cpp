@@ -69,6 +69,7 @@ struct CardData {
 };
 
 // Function Prototypes
+bool loadKeysForUID(const char* uid_str, uint8_t (*keys)[6], int max_keys);
 void hardResetPN532();
 void flashLED(int times);
 void countCards();
@@ -273,12 +274,17 @@ int totalCards = 0;
 // Initialize hardware, storage and web server
 void setup() {
   Serial.begin(115200);
+  while(!Serial); // Wait for serial connection in debug mode
   Serial.println("NFC Multitool Starting...");
 
   // **Mount SPIFFS** for web assets
   if(!SPIFFS.begin(true)) {
     Serial.println("SPIFFS Mount Failed");
-    while(1);
+    flashLED(3); // Visual error indication
+    while(1) {
+      delay(1000);
+      Serial.println("SPIFFS still not mounted...");
+    }
   }
 
   // **Initialize Wi-Fi** (AP mode)
@@ -300,21 +306,35 @@ void setup() {
 
   // **API endpoint to trigger a read**
   server.on("/api/read", HTTP_POST, [](AsyncWebServerRequest *req){
-    // perform your NFC read logic:
     uint8_t uidBuf[10], uidLen;
     lastDump.clear();
-    if (nfcReadPassive(uidBuf, &uidLen)) {
-      // build UID string
-      lastUID = "";
-      for(int i=0;i<uidLen;i++){
-        char b[3]; sprintf(b,"%02X", uidBuf[i]);
-        lastUID += b;
+    lastUID = "";
+
+    if (nfcReadPassive(uidBuf, &uidLen, 1000)) {
+      char uidStr[uidLen * 2 + 1];
+      for (int i = 0; i < uidLen; i++) {
+        sprintf(uidStr + (i * 2), "%02X", uidBuf[i]);
       }
-      // read card data into lastDump (example: Mifare Classic first block)
-      uint8_t block[16];
-        if(nfcAuthBlock(uidBuf, uidLen, 4, 0, (uint8_t*)"\xFF\xFF\xFF\xFF\xFF\xFF")){
-          if(nfcReadBlock(4, block)){
-          lastDump.insert(lastDump.end(), block, block+16);
+      lastUID = uidStr;
+
+      uint8_t keys[40][6];
+      int numKeys = 0;
+      bool keysLoaded = loadKeysForUID(lastUID.c_str(), keys, 40);
+
+      uint8_t defaultKey[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+      
+      for (uint8_t sector = 0; sector < 16; ++sector) {
+        uint8_t* keyToTry = keysLoaded ? keys[sector] : defaultKey;
+        uint8_t firstBlock = sector * 4;
+
+        if (nfcAuthBlock(uidBuf, uidLen, firstBlock, 0, keyToTry)) {
+          for (uint8_t b = 0; b < 3; ++b) {
+            uint8_t blockNum = firstBlock + b;
+            uint8_t blockData[16];
+            if (nfcReadBlock(blockNum, blockData)) {
+              lastDump.insert(lastDump.end(), blockData, blockData + 16);
+            }
+          }
         }
       }
     }
@@ -407,9 +427,12 @@ void setup() {
   SPI.endTransaction();
   if (!sdOk) {
     Serial.println("SD Card initialization failed!");
+    display.clearDisplay();
     display.println("SD Card Failed!");
     display.display();
+    flashLED(3);
     delay(2000);
+    // Continue without SD card functionality
   } else {
     Serial.println("SD Card initialized");
     // Create cards directory if it doesn't exist
@@ -434,7 +457,11 @@ void setup() {
       display.setCursor(0,0);
       display.println("PN532 Not Found!");
       display.display();
-      while(1);
+      flashLED(5); // Visual error indication
+      while(1) {
+        delay(1000);
+        Serial.println("PN532 still not detected...");
+      }
     }
   }
   
@@ -446,6 +473,7 @@ void setup() {
   nfc.SAMConfig();
   nfc.setPassiveActivationRetries(0xFF);
   
+  // Card type is determined by trying different read methods
   display.println("PN532 Ready!");
   display.display();
   delay(1000);
@@ -455,8 +483,15 @@ void setup() {
 
 // Main program loop handles menu updates
 void loop() {
-  // The web server is asynchronous, so the loop can be used for other tasks
-  // or be kept empty. The physical button handling is still needed.
+  static uint32_t lastHeapCheck = 0;
+  
+  // Periodically check memory usage
+  if(millis() - lastHeapCheck > 5000) {
+    lastHeapCheck = millis();
+    Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
+  }
+
+  // Handle user input
   handleInput();
   
   switch(currentMenu) {
@@ -784,40 +819,28 @@ bool readCardData() {
 
 // Read data from a Mifare Classic card
 bool readMifareClassic() {
-    // This is a hack. We can't easily get the SAK for the active card.
-    // For now, we'll just try to read as a 1K card.
-    // A better solution would be to get SAK in handleReadCard and pass it.
-    uint8_t numSectors = 16;
-
+    // Determine card size by authenticating a block in the 4K range
+    uint8_t numSectors = 16; // Default to 1K
     uint8_t keyA[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+    if (nfcAuthBlock(currentCard.uid, currentCard.uidLength, 128, 0, keyA)) {
+        numSectors = 40; // It's a 4K card
+    }
     currentCard.dataLength = 0;
 
-    // Limit reading to what fits in the buffer
-    uint16_t maxSectorsToRead = sizeof(currentCard.data) / (16 * 4);
-    if (numSectors > maxSectorsToRead) {
-        numSectors = maxSectorsToRead;
-    }
-
     for (uint8_t sector = 0; sector < numSectors; sector++) {
-        uint8_t blocks_in_sector = (sector < 32) ? 4 : 16;
-        for (uint8_t block = 0; block < blocks_in_sector; block++) {
-            uint8_t blockNum;
-            if (sector < 32) {
-                blockNum = sector * 4 + block;
-            } else {
-                blockNum = 32 * 4 + (sector - 32) * 16 + block;
-            }
+        uint8_t blocks_in_sector = (sector < 32) ? 3 : 15;
+        uint8_t first_block = (sector < 32) ? (sector * 4) : (128 + (sector - 32) * 16);
 
-            uint8_t blockData[16];
-            if (nfcAuthBlock(currentCard.uid, currentCard.uidLength, blockNum, 0, keyA)) {
+        if (nfcAuthBlock(currentCard.uid, currentCard.uidLength, first_block, 0, keyA)) {
+            for (uint8_t block = 0; block < blocks_in_sector; block++) {
+                uint8_t blockNum = first_block + block;
+                uint8_t blockData[16];
                 if (nfcReadBlock(blockNum, blockData)) {
                     if (currentCard.dataLength + 16 <= sizeof(currentCard.data)) {
                         memcpy(&currentCard.data[currentCard.dataLength], blockData, 16);
                         currentCard.dataLength += 16;
                     }
                 }
-            } else {
-                // Could not auth, maybe fill with zeros or skip
             }
         }
     }
@@ -1378,33 +1401,34 @@ void printKey(const uint8_t* key) {
  */
 
 void saveBruteForceResults() {
-  // e.g. "/cards/brute_123456.txt"
-  String fn = String(CARD_DIR) + "brute_" + String(millis()/1000) + ".txt";
-  File f = SD.open(fn.c_str(), FILE_WRITE);
-  if (!f) return;
-
-  // write header
-  f.print("UID: ");
+  char filename[48];
+  int offset = snprintf(filename, sizeof(filename), "%s", CARD_DIR);
   for (uint8_t i = 0; i < bruteForce.targetUIDLength; i++) {
-    if (bruteForce.targetUID[i] < 0x10) f.print("0");
-    f.print(bruteForce.targetUID[i], HEX);
-    if (i < bruteForce.targetUIDLength-1) f.print(":");
+    offset += snprintf(filename + offset, sizeof(filename) - offset, "%02X", bruteForce.targetUID[i]);
   }
-  f.println();
-  f.println("Sector:Key");
-  // write each cracked sector
+  strncat(filename, ".keys", sizeof(filename) - strlen(filename) - 1);
+
+  File f = SD.open(filename, FILE_WRITE);
+  if (!f) {
+    Serial.println("Failed to save keys");
+    return;
+  }
+
   for (uint8_t s = 0; s < bruteForce.sectorCount; s++) {
     if (bruteForce.keyFound[s]) {
-      f.print(s); f.print(": ");
+      f.print("S");
+      f.print(s);
+      f.print(":");
       for (uint8_t b = 0; b < 6; b++) {
         if (bruteForce.foundKeys[s][b] < 0x10) f.print("0");
         f.print(bruteForce.foundKeys[s][b], HEX);
-        if (b<5) f.print(":");
       }
       f.println();
     }
   }
   f.close();
+  Serial.print("Saved keys to: ");
+  Serial.println(filename);
 }
 
 /**
@@ -1733,8 +1757,53 @@ void handleSettingsConfirmFormat() {
   }
 }
 
-// ——— ADD ABOVE countCards() ———
 // Load a card dump file into a CardData struct
+
+// Convert a hex character to its integer value
+int hexToInt(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return 0;
+}
+
+// Convert a 2-char hex string to a byte
+uint8_t hexToByte(const char* hex) {
+  return (hexToInt(hex[0]) << 4) | hexToInt(hex[1]);
+}
+
+bool loadKeysForUID(const char* uid_str, uint8_t (*keys)[6], int max_keys) {
+  char filename[48];
+  snprintf(filename, sizeof(filename), "%s%s.keys", CARD_DIR, uid_str);
+
+  File f = SD.open(filename, FILE_READ);
+  if (!f) {
+    Serial.println("No keys file found.");
+    return false;
+  }
+
+  int key_count = 0;
+  while (f.available() && key_count < max_keys) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (line.startsWith("S")) {
+      int separator_pos = line.indexOf(':');
+      if (separator_pos > 1) {
+        int sector = line.substring(1, separator_pos).toInt();
+        String key_hex = line.substring(separator_pos + 1);
+        key_hex.trim();
+        if (key_hex.length() == 12 && sector < max_keys) {
+          for (int i = 0; i < 6; i++) {
+            keys[sector][i] = hexToByte(key_hex.substring(i*2, i*2+2).c_str());
+          }
+        }
+      }
+    }
+  }
+  f.close();
+  return true;
+}
+
 bool loadCardFromSD(const char* filename, CardData* card) {
   File f = SD.open(filename, FILE_READ);
   if (!f) {
@@ -1765,17 +1834,10 @@ bool loadCardFromSD(const char* filename, CardData* card) {
   return true;
 }
 
-// ——— ABOVE countCards() ———
 // Check if another NFC reader is nearby
 bool detectExternalReader() {
   return (nfcListTargets() > 0);
 }
-
-// End emulation session (placeholder)
-void stopCardEmulation() {
-  // No action needed for simple detection
-}
-// ————————————————————
 
 /**
  * Counts the number of .nfc files in the CARD_DIR directory
